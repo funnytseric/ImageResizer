@@ -1,14 +1,19 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ImageResizer
 {
     public class ImageProcess
     {
+        static object lockObj = new object();
         /// <summary>
         /// 清空目的目錄下的所有檔案與目錄
         /// </summary>
@@ -36,11 +41,15 @@ namespace ImageResizer
         /// <param name="sourcePath">圖片來源目錄路徑</param>
         /// <param name="destPath">產生圖片目的目錄路徑</param>
         /// <param name="scale">縮放比例</param>
-        public void ResizeImages(string sourcePath, string destPath, double scale)
+        public void ResizeImages(int numRound, string sourcePath, string destPath, double scale)
         {
             var allFiles = FindImages(sourcePath);
+            int imageIndex = 1;
+
             foreach (var filePath in allFiles)
             {
+                Console.WriteLine($"正在處理第 {numRound} 輪 - 第 {imageIndex} 張圖片 [Thread ID = {Thread.CurrentThread.ManagedThreadId}]");
+
                 Image imgPhoto = Image.FromFile(filePath);
                 string imgName = Path.GetFileNameWithoutExtension(filePath);
 
@@ -56,6 +65,7 @@ namespace ImageResizer
 
                 string destFile = Path.Combine(destPath, imgName + ".jpg");
                 processedImage.Save(destFile, ImageFormat.Jpeg);
+                imageIndex++;
             }
         }
 
@@ -65,15 +75,22 @@ namespace ImageResizer
         /// <param name="sourcePath">圖片來源目錄路徑</param>
         /// <param name="destPath">產生圖片目的目錄路徑</param>
         /// <param name="scale">縮放比例</param>
-        public async Task ResizeImageAsync(string sourcePath, string destPath, double scale)
+        public async Task ResizeImageAsync(int numRound, string sourcePath, string destPath, double scale)
         {
             var allFiles = FindImages(sourcePath);
             var taskList = new List<Task>();
+            int imageIndex = 0;
 
             foreach (var filePath in allFiles)
             {
                 taskList.Add(Task.Run(()=>
                 {
+                    lock (lockObj)
+                    {
+                        imageIndex++;
+                    }
+                    Console.WriteLine($"正在處理第 {numRound} 輪 - 第 {imageIndex} 張圖片 [Thread ID = {Thread.CurrentThread.ManagedThreadId}]");
+
                     Image imgPhoto = Image.FromFile(filePath);
                     string imgName = Path.GetFileNameWithoutExtension(filePath);
 
@@ -93,6 +110,62 @@ namespace ImageResizer
             }
 
             await Task.WhenAll(taskList);
+        }
+
+        /// <summary>
+        /// 第二種非同步版圖片的縮放作業，根據邏輯處理器數量做批次處理
+        /// </summary>
+        /// <param name="sourcePath">圖片來源目錄路徑</param>
+        /// <param name="destPath">產生圖片目的目錄路徑</param>
+        /// <param name="scale">縮放比例</param>
+        public async Task ResizeImageBoundHyperThreadAsync(int numRound, string sourcePath, string destPath, double scale)
+        {
+            var allFiles = FindImages(sourcePath);
+            var taskList = new List<Task>();
+            int numLogicalProcessor = Environment.ProcessorCount;
+            int imageIndex = 0;
+
+            foreach (var filePath in allFiles)
+            {
+                taskList.Add(Task.Run(() =>
+                {
+                    lock(lockObj)
+                    {
+                        imageIndex++;
+                    }
+                    Console.WriteLine($"正在處理第 {numRound} 輪 - 第 {imageIndex} 張圖片 [Thread ID = {Thread.CurrentThread.ManagedThreadId}]");
+
+                    Image imgPhoto = Image.FromFile(filePath);
+                    string imgName = Path.GetFileNameWithoutExtension(filePath);
+
+                    int sourceWidth = imgPhoto.Width;
+                    int sourceHeight = imgPhoto.Height;
+
+                    int destionatonWidth = (int)(sourceWidth * scale);
+                    int destionatonHeight = (int)(sourceHeight * scale);
+
+                    Bitmap processedImage = processBitmap((Bitmap)imgPhoto,
+                        sourceWidth, sourceHeight,
+                        destionatonWidth, destionatonHeight);
+
+                    string destFile = Path.Combine(destPath, imgName + ".jpg");
+                    processedImage.Save(destFile, ImageFormat.Jpeg);
+                }));
+            }
+
+            int rangeIndex = 0;
+            while(rangeIndex < taskList.Count)
+            {
+                //根據邏輯處理器數量取 task，然後才等待
+                int numToTake = 
+                    taskList.Count - rangeIndex > numLogicalProcessor ?
+                    numLogicalProcessor : taskList.Count - rangeIndex;
+
+                var batch = taskList.GetRange(rangeIndex, numToTake);
+                await Task.WhenAll(batch);
+
+                rangeIndex += numLogicalProcessor;
+            }
         }
 
         /// <summary>
