@@ -96,6 +96,7 @@ namespace ImageResizer
             Console.WriteLine($"第一種非同步處理平均 {avgAsync} ms; 改善率 {(avgNormal - avgAsync) / avgNormal * 100, 0:F3} %");
             Console.WriteLine($"第二種非同步處理平均 {avgAsync2} ms; 改善率 {(avgNormal - avgAsync2) / avgNormal * 100,0:F3} %");
             Console.ReadKey();
+
         }
     }
 }
